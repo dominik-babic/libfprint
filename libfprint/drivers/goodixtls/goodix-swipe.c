@@ -5,7 +5,9 @@
  * Copyright (C) 2021 Alireza S.N. <alireza6677@gmail.com>
  *
  * Swipe processing split out of goodix55x4.c. */
+#define FP_COMPONENT "goodixtls55x4"
 #include "goodix-swipe.h"
+#include "fpi-log.h"
 #include <string.h>
 
 #define FINGER_DROP 350
@@ -76,9 +78,37 @@ make_stripe (const guint8 *out)
   return stripe;
 }
 
+/* Diagnostics: dump the kept stripes (newest first in the list) when asked. */
+static void
+dump_stripes (GSList *newest_first, guint n_stripes)
+{
+  const gchar *dump_dir = g_getenv ("GOODIX_DEBUG_STRIPES");
+  guint index = n_stripes;
+
+  if (!dump_dir)
+    return;
+  for (GSList *item = newest_first; item && index > 0; item = item->next)
+    {
+      struct fpi_frame *frame = item->data;
+      const gsize size = (gsize) GOODIX55X4_SWIPE_FRAME_W * GOODIX55X4_SWIPE_FRAME_H;
+      g_autofree gchar *path = g_strdup_printf ("%s/stripe-%02u.pgm", dump_dir, --index);
+      g_autofree gchar *header = g_strdup_printf ("P5\n%d %d\n255\n",
+                                                  GOODIX55X4_SWIPE_FRAME_W,
+                                                  GOODIX55X4_SWIPE_FRAME_H);
+      g_autoptr(GError) dump_error = NULL;
+      g_autofree gchar *blob = g_malloc (strlen (header) + size);
+      memcpy (blob, header, strlen (header));
+      memcpy (blob + strlen (header), frame->data, size);
+      if (!g_file_set_contents (path, blob, strlen (header) + size, &dump_error))
+        fp_warn ("stripe dump failed: %s", dump_error->message);
+    }
+}
+
 static GoodixSwipeResult
 swipe_result (GoodixSwipe *swipe)
 {
+  if (swipe->n_stripes < GOODIX_SWIPE_MIN_STRIPES)
+    dump_stripes (swipe->stripes, swipe->n_stripes);
   return swipe->n_stripes >= GOODIX_SWIPE_MIN_STRIPES ?
          GOODIX_SWIPE_COMPLETE : GOODIX_SWIPE_TOO_SHORT;
 }
@@ -96,6 +126,8 @@ goodix_swipe_feed (GoodixSwipe *swipe, Goodix55X4Pix *frame,
       if (swipe->present)
         {
           swipe->present = FALSE;
+          fp_dbg ("swipe end (finger lifted): mean=%d baseline=%d frames=%u stripes=%u moving=%d",
+                  mean, swipe->baseline, swipe->n_frames, swipe->n_stripes, swipe->moving);
           return swipe_result (swipe);
         }
       /* Follow the empty sensor's upper envelope without chasing a slowly
@@ -120,10 +152,18 @@ goodix_swipe_feed (GoodixSwipe *swipe, Goodix55X4Pix *frame,
 
   guint difference = goodix_image_swipe_out_diff (out, swipe->previous);
   memcpy (swipe->previous, out, sizeof (out));
+  fp_dbg ("swipe frame %u: mean=%d baseline=%d diff=%u kept_diff=%u stripes=%u static=%u",
+          swipe->n_frames, mean, swipe->baseline, difference,
+          swipe->have_kept ? goodix_image_swipe_out_diff (out, swipe->kept) : 0,
+          swipe->n_stripes, swipe->static_frames);
   if (difference <= MOTION_THRESHOLD)
     {
       if (++swipe->static_frames >= GOODIX_SWIPE_STATIC_FRAMES && swipe->moving)
-        return swipe_result (swipe);
+        {
+          fp_dbg ("swipe end (finger stopped): frames=%u stripes=%u",
+                  swipe->n_frames, swipe->n_stripes);
+          return swipe_result (swipe);
+        }
       return GOODIX_SWIPE_CONTINUE;
     }
 
@@ -237,6 +277,33 @@ goodix_swipe_assemble (GSList *stripes)
 
   g_return_val_if_fail (stripes && stripes->next, NULL);
   estimate_motion (stripes);
+
+  /* Diagnostics: dump the kept stripes and the chosen shifts when asked. */
+  const gchar *dump_dir = g_getenv ("GOODIX_DEBUG_STRIPES");
+  guint index = 0;
+  for (GSList *item = stripes; item; item = item->next, index++)
+    {
+      struct fpi_frame *frame = item->data;
+      fp_dbg ("stripe %u: delta_x=%d delta_y=%d", index, frame->delta_x, frame->delta_y);
+      if (dump_dir)
+        {
+          g_autofree gchar *path = g_strdup_printf ("%s/stripe-%02u.pgm", dump_dir, index);
+          g_autofree gchar *header = g_strdup_printf ("P5\n%d %d\n255\n",
+                                                      GOODIX55X4_SWIPE_FRAME_W,
+                                                      GOODIX55X4_SWIPE_FRAME_H);
+          g_autoptr(GError) dump_error = NULL;
+          g_autofree gchar *blob = g_malloc (strlen (header) +
+                                             GOODIX55X4_SWIPE_FRAME_W * GOODIX55X4_SWIPE_FRAME_H);
+          memcpy (blob, header, strlen (header));
+          memcpy (blob + strlen (header), frame->data,
+                  GOODIX55X4_SWIPE_FRAME_W * GOODIX55X4_SWIPE_FRAME_H);
+          if (!g_file_set_contents (path, blob,
+                                    strlen (header) + GOODIX55X4_SWIPE_FRAME_W * GOODIX55X4_SWIPE_FRAME_H,
+                                    &dump_error))
+            fp_warn ("stripe dump failed: %s", dump_error->message);
+        }
+    }
+
   FpImage *image = fpi_assemble_frames (&ctx, stripes);
   image->ppmm = 500.0 / 25.4;
   image->flags |= FPI_IMAGE_COLORS_INVERTED;
