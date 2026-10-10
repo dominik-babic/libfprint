@@ -48,6 +48,11 @@ static const GoodixProfile profiles[] = {
    config_55a2, sizeof (config_55a2)},
   {0x55a2, "GF3206_RTSEC_APP_10062", 56, 176, 4, 1024, 600,
    config_55a2, sizeof (config_55a2)},
+  /* Lenovo IdeaPad 5 15ARE05 (81YQ) ships a 55a2 reporting GF3208 firmware.
+   * Experimental: same configuration, geometry and timing as the GF3206
+   * profiles; the frame and baseline length checks guard the geometry. */
+  {0x55a2, "GF3208_RTSEC_APP_10050", 56, 176, 4, 1024, 600,
+   config_55a2, sizeof (config_55a2)},
 };
 
 const GoodixProfile *
