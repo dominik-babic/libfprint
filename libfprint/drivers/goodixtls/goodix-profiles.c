@@ -53,6 +53,9 @@ static const GoodixProfile profiles[] = {
    * profiles; the frame and baseline length checks guard the geometry. */
   {0x55a2, "GF3208_RTSEC_APP_10050", 56, 176, 4, 1024, 600,
    config_55a2, sizeof (config_55a2)},
+  /* The same reader has also reported this spelling on a later open. */
+  {0x55a2, "GF3206_RTSEC_APP_10050", 56, 176, 4, 1024, 600,
+   config_55a2, sizeof (config_55a2)},
 };
 
 const GoodixProfile *
